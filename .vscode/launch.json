@@ -1,0 +1,33 @@
+{
+    "version": "0.2.0",
+    "compounds": [
+        {
+            "name": "Launch All Services",
+            "configurations": ["Debug: Auth", "Debug: EventManagement"],
+            "preLaunchTask": "docker: start databases",
+            "stopAll": true
+        }
+    ],
+    "configurations": [
+        {
+            "name": "Debug: Auth",
+            "type": "dotnet",
+            "request": "launch",
+            "projectPath": "${workspaceFolder}/Auth/Auth.csproj",
+            "preLaunchTask": "build: Auth",
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            }
+        },
+        {
+            "name": "Debug: EventManagement",
+            "type": "dotnet",
+            "request": "launch",
+            "projectPath": "${workspaceFolder}/EventManagement/EventManagement.csproj",
+            "preLaunchTask": "build: EventManagement",
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            }
+        }
+    ]
+}

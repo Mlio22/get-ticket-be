@@ -1,0 +1,33 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build: Auth",
+            "command": "dotnet",
+            "type": "process",
+            "args": ["build", "${workspaceFolder}/Auth/Auth.csproj", "/property:GenerateFullPaths=true", "/consoleloggerparameters:NoSummary"],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "build: EventManagement",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/EventManagement/EventManagement.csproj",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "docker: start databases",
+            "type": "shell",
+            "command": "docker compose up -d auth-db eventmanagement-db",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

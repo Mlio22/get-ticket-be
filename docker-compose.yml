@@ -1,0 +1,80 @@
+services:
+    # ── Databases ────────────────────────────────────────────────────
+    auth-db:
+        image: postgres:16-alpine
+        container_name: auth-db
+        environment:
+            POSTGRES_DB: auth_db
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: postgres
+        ports:
+            - "5433:5432"
+        volumes:
+            - auth_db_data:/var/lib/postgresql/data
+            - ./Auth/Data/Migrations:/docker-entrypoint-initdb.d
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U postgres -d auth_db"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    eventmanagement-db:
+        image: postgres:16-alpine
+        container_name: eventmanagement-db
+        environment:
+            POSTGRES_DB: event_management_db
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: postgres
+        ports:
+            - "5434:5432"
+        volumes:
+            - eventmanagement_db_data:/var/lib/postgresql/data
+            - ./EventManagement/Data/Migrations:/docker-entrypoint-initdb.d
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U postgres -d event_management_db"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    # ── Services ─────────────────────────────────────────────────────
+    auth:
+        build:
+            context: ./Auth
+            dockerfile: Dockerfile
+        container_name: auth-service
+        environment:
+            ASPNETCORE_ENVIRONMENT: Production
+            ConnectionStrings__DefaultConnection: "Host=auth-db;Port=5432;Database=auth_db;Username=postgres;Password=postgres"
+            JwtSettings__SecretKey: "CHANGE_ME_TO_A_STRONG_SECRET_KEY_AT_LEAST_32_CHARS"
+            JwtSettings__Issuer: "GetTicket"
+            JwtSettings__Audience: "GetTicketClient"
+            JwtSettings__ExpiryMinutes: "60"
+        ports:
+            - "5001:8080"
+        depends_on:
+            auth-db:
+                condition: service_healthy
+        restart: unless-stopped
+
+    eventmanagement:
+        build:
+            context: ./EventManagement
+            dockerfile: Dockerfile
+        container_name: eventmanagement-service
+        environment:
+            ASPNETCORE_ENVIRONMENT: Production
+            ConnectionStrings__DefaultConnection: "Host=eventmanagement-db;Port=5432;Database=event_management_db;Username=postgres;Password=postgres"
+            JwtSettings__SecretKey: "CHANGE_ME_TO_A_STRONG_SECRET_KEY_AT_LEAST_32_CHARS"
+            JwtSettings__Issuer: "GetTicket"
+            JwtSettings__Audience: "GetTicketClient"
+            JwtSettings__ExpiryMinutes: "60"
+        ports:
+            - "5002:8080"
+        depends_on:
+            eventmanagement-db:
+                condition: service_healthy
+        restart: unless-stopped
+
+volumes:
+    auth_db_data:
+    eventmanagement_db_data:
