@@ -19,7 +19,14 @@ public class TicketTypeRepository : ITicketTypeRepository
     {
         using var ctx = _dbManager.CreateContext();
         const string sql = """
-            SELECT id, event_id, name, description, price, total_seats, available_seats, status
+            SELECT id, event_id, name, description, price, currency, total_seats, available_seats,
+                   sale_start_date, sale_end_date,
+                   CASE status
+                       WHEN 1 THEN 'available'
+                       WHEN 2 THEN 'sold_out'
+                       WHEN 3 THEN 'cancelled'
+                       ELSE 'unknown'
+                   END AS status
             FROM ticket_types
             WHERE event_id = @EventId AND is_deleted = FALSE
             ORDER BY price ASC
@@ -35,11 +42,47 @@ public class TicketTypeRepository : ITicketTypeRepository
         };
     }
 
+    public async Task<IReadOnlyDictionary<Guid, List<TicketTypeResponse>>> GetByEventIdsAsync(
+        IEnumerable<Guid> eventIds
+    )
+    {
+        var idList = eventIds.Distinct().ToList();
+        if (idList.Count == 0)
+            return new Dictionary<Guid, List<TicketTypeResponse>>();
+
+        using var ctx = _dbManager.CreateContext();
+        const string sql = """
+            SELECT id, event_id, name, description, price, currency, total_seats, available_seats,
+                   sale_start_date, sale_end_date,
+                   CASE status
+                       WHEN 1 THEN 'available'
+                       WHEN 2 THEN 'sold_out'
+                       WHEN 3 THEN 'cancelled'
+                       ELSE 'unknown'
+                   END AS status
+            FROM ticket_types
+            WHERE event_id = ANY(@EventIds) AND is_deleted = FALSE
+            ORDER BY price ASC
+            """;
+
+        var list = (
+            await Crud.QueryAsync<TicketTypeResponse>(ctx, sql, new { EventIds = idList.ToArray() })
+        ).ToList();
+        return list.GroupBy(x => x.EventId).ToDictionary(g => g.Key, g => g.ToList());
+    }
+
     public async Task<TicketTypeResponse?> GetByIdAsync(Guid id)
     {
         using var ctx = _dbManager.CreateContext();
         const string sql = """
-            SELECT id, event_id, name, description, price, total_seats, available_seats, status
+            SELECT id, event_id, name, description, price, currency, total_seats, available_seats,
+                   sale_start_date, sale_end_date,
+                   CASE status
+                       WHEN 1 THEN 'available'
+                       WHEN 2 THEN 'sold_out'
+                       WHEN 3 THEN 'cancelled'
+                       ELSE 'unknown'
+                   END AS status
             FROM ticket_types
             WHERE id = @Id AND is_deleted = FALSE
             """;
@@ -50,8 +93,12 @@ public class TicketTypeRepository : ITicketTypeRepository
     {
         using var ctx = _dbManager.CreateContext();
         const string sql = """
-            INSERT INTO ticket_types (id, event_id, name, description, price, total_seats, available_seats, status, is_deleted, created_on, created_by)
-            VALUES (@Id, @EventId, @Name, @Description, @Price, @TotalSeats, @AvailableSeats, @Status, @IsDeleted, @CreatedOn, @CreatedBy)
+            INSERT INTO ticket_types (id, event_id, name, description, price, currency,
+                                      total_seats, available_seats, sale_start_date, sale_end_date,
+                                      status, is_deleted, created_on, created_by)
+            VALUES (@Id, @EventId, @Name, @Description, @Price, @Currency,
+                    @TotalSeats, @AvailableSeats, @SaleStartDate, @SaleEndDate,
+                    @Status, @IsDeleted, @CreatedOn, @CreatedBy)
             """;
         return await Crud.InsertAsync(
             ctx,
@@ -63,8 +110,11 @@ public class TicketTypeRepository : ITicketTypeRepository
                 ticketType.Name,
                 ticketType.Description,
                 ticketType.Price,
+                ticketType.Currency,
                 ticketType.TotalSeats,
                 ticketType.AvailableSeats,
+                ticketType.SaleStartDate,
+                ticketType.SaleEndDate,
                 ticketType.Status,
                 ticketType.IsDeleted,
                 ticketType.CreatedOn,
@@ -78,8 +128,9 @@ public class TicketTypeRepository : ITicketTypeRepository
         using var ctx = _dbManager.CreateContext();
         const string sql = """
             UPDATE ticket_types
-            SET name = @Name, description = @Description, price = @Price,
-                total_seats = @TotalSeats, available_seats = @AvailableSeats, status = @Status,
+            SET name = @Name, description = @Description, price = @Price, currency = @Currency,
+                total_seats = @TotalSeats, available_seats = @AvailableSeats,
+                sale_start_date = @SaleStartDate, sale_end_date = @SaleEndDate, status = @Status,
                 updated_on = @UpdatedOn, updated_by = @UpdatedBy
             WHERE id = @Id AND is_deleted = FALSE
             """;
@@ -91,8 +142,11 @@ public class TicketTypeRepository : ITicketTypeRepository
                 ticketType.Name,
                 ticketType.Description,
                 ticketType.Price,
+                ticketType.Currency,
                 ticketType.TotalSeats,
                 ticketType.AvailableSeats,
+                ticketType.SaleStartDate,
+                ticketType.SaleEndDate,
                 ticketType.Status,
                 ticketType.UpdatedOn,
                 ticketType.UpdatedBy,

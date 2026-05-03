@@ -20,7 +20,18 @@ public class EventRepository : IEventRepository
         using var ctx = _dbManager.CreateContext();
         var sql =
             """
-                SELECT id, organizer_id, title, description, location, start_date, end_date, status
+                SELECT id, organizer_id, title, description, category, location, address, timezone,
+                       poster_image, banner_image, is_featured, start_date, end_date,
+                       CASE status
+                           WHEN 1 THEN 'draft'
+                           WHEN 2 THEN 'published'
+                           WHEN 3 THEN 'ongoing'
+                           WHEN 4 THEN 'completed'
+                           WHEN 5 THEN 'cancelled'
+                           ELSE 'unknown'
+                       END AS status,
+                       created_on AS created_at,
+                       updated_on AS updated_at
                 FROM events
                 WHERE is_deleted = FALSE
                 """
@@ -39,11 +50,54 @@ public class EventRepository : IEventRepository
         };
     }
 
+    public async Task<ListResponse<EventResponse>> GetByOrganizerIdAsync(Guid organizerId)
+    {
+        using var ctx = _dbManager.CreateContext();
+        const string sql = """
+            SELECT id, organizer_id, title, description, category, location, address, timezone,
+                   poster_image, banner_image, is_featured, start_date, end_date,
+                   CASE status
+                       WHEN 1 THEN 'draft'
+                       WHEN 2 THEN 'published'
+                       WHEN 3 THEN 'ongoing'
+                       WHEN 4 THEN 'completed'
+                       WHEN 5 THEN 'cancelled'
+                       ELSE 'unknown'
+                   END AS status,
+                   created_on AS created_at,
+                   updated_on AS updated_at
+            FROM events
+            WHERE organizer_id = @OrganizerId AND is_deleted = FALSE
+            ORDER BY start_date ASC
+            """;
+
+        var list = (
+            await Crud.QueryAsync<EventResponse>(ctx, sql, new { OrganizerId = organizerId })
+        ).ToList();
+        return new ListResponse<EventResponse>
+        {
+            IsOk = true,
+            List = list,
+            RecordCount = list.Count,
+        };
+    }
+
     public async Task<EventResponse?> GetByIdAsync(Guid id)
     {
         using var ctx = _dbManager.CreateContext();
         const string sql = """
-            SELECT id, organizer_id, title, description, location, start_date, end_date, status
+            SELECT id, organizer_id, title, description, category, location, address, timezone,
+                   poster_image, banner_image, is_featured, start_date, end_date,
+                   CASE status
+                       WHEN 1 THEN 'draft'
+                       WHEN 2 THEN 'published'
+                       WHEN 3 THEN 'ongoing'
+                       WHEN 4 THEN 'completed'
+                       WHEN 5 THEN 'cancelled'
+                       ELSE 'unknown'
+                   END AS status,
+                   created_on AS created_at,
+                   updated_on AS updated_at
             FROM events
             WHERE id = @Id AND is_deleted = FALSE
             """;
@@ -54,8 +108,12 @@ public class EventRepository : IEventRepository
     {
         using var ctx = _dbManager.CreateContext();
         const string sql = """
-            INSERT INTO events (id, organizer_id, title, description, location, start_date, end_date, status, is_deleted, created_on, created_by)
-            VALUES (@Id, @OrganizerId, @Title, @Description, @Location, @StartDate, @EndDate, @Status, @IsDeleted, @CreatedOn, @CreatedBy)
+            INSERT INTO events (id, organizer_id, title, description, category, location, address,
+                                timezone, poster_image, banner_image, is_featured, start_date, end_date,
+                                status, is_deleted, created_on, created_by)
+            VALUES (@Id, @OrganizerId, @Title, @Description, @Category, @Location, @Address,
+                   @Timezone, @PosterImage, @BannerImage, @IsFeatured, @StartDate, @EndDate,
+                   @Status, @IsDeleted, @CreatedOn, @CreatedBy)
             """;
         return await Crud.InsertAsync(
             ctx,
@@ -66,7 +124,13 @@ public class EventRepository : IEventRepository
                 ev.OrganizerId,
                 ev.Title,
                 ev.Description,
+                ev.Category,
                 ev.Location,
+                ev.Address,
+                ev.Timezone,
+                ev.PosterImage,
+                ev.BannerImage,
+                ev.IsFeatured,
                 ev.StartDate,
                 ev.EndDate,
                 ev.Status,
@@ -82,7 +146,9 @@ public class EventRepository : IEventRepository
         using var ctx = _dbManager.CreateContext();
         const string sql = """
             UPDATE events
-            SET title = @Title, description = @Description, location = @Location,
+            SET title = @Title, description = @Description, category = @Category,
+                location = @Location, address = @Address, timezone = @Timezone,
+                poster_image = @PosterImage, banner_image = @BannerImage, is_featured = @IsFeatured,
                 start_date = @StartDate, end_date = @EndDate, status = @Status,
                 updated_on = @UpdatedOn, updated_by = @UpdatedBy
             WHERE id = @Id AND is_deleted = FALSE
@@ -94,7 +160,13 @@ public class EventRepository : IEventRepository
             {
                 ev.Title,
                 ev.Description,
+                ev.Category,
                 ev.Location,
+                ev.Address,
+                ev.Timezone,
+                ev.PosterImage,
+                ev.BannerImage,
+                ev.IsFeatured,
                 ev.StartDate,
                 ev.EndDate,
                 ev.Status,

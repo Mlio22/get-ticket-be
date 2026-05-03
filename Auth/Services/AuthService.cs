@@ -55,6 +55,30 @@ public class AuthService : IAuthService
         };
     }
 
+    public async Task<DataResponse<MeResponse>> GetMeAsync(Guid userId)
+    {
+        var user = await _userRepository.GetByIdAsync(userId);
+        if (user is null)
+        {
+            return new DataResponse<MeResponse> { IsOk = false, ErrorMessage = "User not found." };
+        }
+
+        return new DataResponse<MeResponse>
+        {
+            IsOk = true,
+            Data = new MeResponse
+            {
+                Id = user.Id.ToString(),
+                Email = user.Email,
+                Name = user.FullName,
+                Role = MapRole(user.Role.ToString()),
+                Avatar = null,
+                Phone = null,
+                CreatedAt = user.CreatedOn,
+            },
+        };
+    }
+
     public async Task<BaseResponse> RegisterAsync(RegisterRequest request)
     {
         var existing = await _userRepository.GetByEmailAsync(request.Email);
@@ -69,7 +93,7 @@ public class AuthService : IAuthService
             Email = request.Email,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
             FullName = request.FullName,
-            Role = request.Role,
+            Role = Common.Enums.UserRole.Customer,
             IsActive = true,
             IsDeleted = false,
             CreatedOn = DateTime.UtcNow,
@@ -85,4 +109,12 @@ public class AuthService : IAuthService
             AnyChange = rows,
         };
     }
+
+    private static string MapRole(string role) =>
+        role switch
+        {
+            "EventOrganizer" => "organizer",
+            "Admin" => "admin",
+            _ => "user",
+        };
 }

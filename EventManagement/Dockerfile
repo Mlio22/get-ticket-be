@@ -4,13 +4,14 @@ EXPOSE 8080
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY ["EventManagement.csproj", "."]
-RUN dotnet restore "./EventManagement.csproj"
+COPY ["EventManagement/EventManagement.csproj", "EventManagement/"]
+COPY ["Common/Common.csproj", "Common/"]
+RUN dotnet restore "EventManagement/EventManagement.csproj"
 COPY . .
-RUN dotnet build "EventManagement.csproj" -c Release -o /app/build
+RUN dotnet build "EventManagement/EventManagement.csproj" -c Release -o /app/build
 
 FROM build AS publish
-RUN dotnet publish "EventManagement.csproj" -c Release -o /app/publish /p:UseAppHost=false
+RUN dotnet publish "EventManagement/EventManagement.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
 FROM base AS final
 WORKDIR /app

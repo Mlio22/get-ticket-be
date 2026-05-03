@@ -23,6 +23,10 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "Auth Service", Version = "v1" });
+    c.IncludeXmlComments(
+        Path.Combine(AppContext.BaseDirectory, "Auth.xml"),
+        includeControllerXmlComments: true
+    );
     c.AddSecurityDefinition(
         "Bearer",
         new OpenApiSecurityScheme
@@ -80,6 +84,20 @@ builder.Services.AddSingleton<IDbManager, DbManager>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, CurrentUser>();
 
+// CORS
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        var origins = allowedOrigins ?? ["*"];
+        if (origins.Contains("*"))
+            policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader();
+        else
+            policy.WithOrigins(origins).AllowAnyMethod().AllowAnyHeader().AllowCredentials();
+    });
+});
+
 // App services
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IAuthService, AuthService>();
@@ -93,6 +111,7 @@ app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Auth Servic
 
 app.UseMiddleware<ExceptionMiddleware>();
 app.UseHttpsRedirection();
+app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

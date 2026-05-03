@@ -23,7 +23,7 @@
         {
             "label": "docker: start databases",
             "type": "shell",
-            "command": "docker compose up -d auth-db eventmanagement-db",
+            "command": "docker compose up -d postgres redis",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
