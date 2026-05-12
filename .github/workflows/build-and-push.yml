@@ -1,0 +1,44 @@
+name: Build And Push Images
+
+on:
+    push:
+        branches:
+            - main
+    workflow_dispatch:
+
+jobs:
+    build-and-push:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Set image variables
+              run: |
+                  echo "GHCR_NAMESPACE=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+                  echo "IMAGE_TAG=${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+            - name: Log in to GitHub Container Registry
+              uses: docker/login-action@v3
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Build images
+              run: docker compose -f .github/docker-compose.yml build
+
+            - name: Push commit-tagged images
+              run: docker compose -f .github/docker-compose.yml push
+
+            - name: Push latest tags
+              if: github.ref == 'refs/heads/main'
+              run: |
+                  docker tag "ghcr.io/${GHCR_NAMESPACE}/get-ticket-auth:${IMAGE_TAG}" "ghcr.io/${GHCR_NAMESPACE}/get-ticket-auth:latest"
+                  docker tag "ghcr.io/${GHCR_NAMESPACE}/get-ticket-eventmanagement:${IMAGE_TAG}" "ghcr.io/${GHCR_NAMESPACE}/get-ticket-eventmanagement:latest"
+                  docker push "ghcr.io/${GHCR_NAMESPACE}/get-ticket-auth:latest"
+                  docker push "ghcr.io/${GHCR_NAMESPACE}/get-ticket-eventmanagement:latest"

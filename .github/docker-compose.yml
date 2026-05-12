@@ -1,0 +1,12 @@
+services:
+    auth:
+        image: ghcr.io/${GHCR_NAMESPACE}/get-ticket-auth:${IMAGE_TAG:-latest}
+        build:
+            context: ..
+            dockerfile: Auth/Dockerfile
+
+    eventmanagement:
+        image: ghcr.io/${GHCR_NAMESPACE}/get-ticket-eventmanagement:${IMAGE_TAG:-latest}
+        build:
+            context: ..
+            dockerfile: EventManagement/Dockerfile
