@@ -8,6 +8,7 @@ using EventManagement.Model;
 using EventManagement.Repositories.Interfaces;
 using EventManagement.Services.Interfaces;
 using Microsoft.Extensions.Options;
+using QRCoder;
 
 namespace EventManagement.Services;
 
@@ -16,28 +17,40 @@ public class CheckoutService : ICheckoutService
     private readonly CheckoutOptions _checkoutOptions;
     private readonly ICheckoutLockService _checkoutLockService;
     private readonly ICheckoutRepository _checkoutRepository;
+    private readonly IEmailService _emailService;
     private readonly IEventRepository _eventRepository;
+    private readonly FrontendOptions _frontendOptions;
+    private readonly ILogger<CheckoutService> _logger;
     private readonly ITicketTypeRepository _ticketTypeRepository;
+    private readonly ITicketRepository _ticketRepository;
     private readonly IXenditClient _xenditClient;
     private readonly XenditOptions _xenditOptions;
 
     public CheckoutService(
         IEventRepository eventRepository,
         ITicketTypeRepository ticketTypeRepository,
+        ITicketRepository ticketRepository,
         ICheckoutRepository checkoutRepository,
+        IEmailService emailService,
         ICheckoutLockService checkoutLockService,
         IXenditClient xenditClient,
         IOptions<CheckoutOptions> checkoutOptions,
-        IOptions<XenditOptions> xenditOptions
+        IOptions<XenditOptions> xenditOptions,
+        IOptions<FrontendOptions> frontendOptions,
+        ILogger<CheckoutService> logger
     )
     {
         _eventRepository = eventRepository;
         _ticketTypeRepository = ticketTypeRepository;
+        _ticketRepository = ticketRepository;
         _checkoutRepository = checkoutRepository;
+        _emailService = emailService;
         _checkoutLockService = checkoutLockService;
         _xenditClient = xenditClient;
         _checkoutOptions = checkoutOptions.Value;
         _xenditOptions = xenditOptions.Value;
+        _frontendOptions = frontendOptions.Value;
+        _logger = logger;
     }
 
     public async Task<DataResponse<CheckoutResponse>> CreateAsync(
@@ -233,6 +246,8 @@ public class CheckoutService : ICheckoutService
             checkoutSession.XenditInvoiceId = invoice.Id;
             checkoutSession.XenditInvoiceUrl = invoice.InvoiceUrl;
 
+            await SendOrderCreatedEmailAsync(checkoutSession, ev.Title, checkoutItems);
+
             return new DataResponse<CheckoutResponse>
             {
                 IsOk = true,
@@ -280,6 +295,52 @@ public class CheckoutService : ICheckoutService
         {
             IsOk = true,
             Data = MapResponse(checkout, ev?.Title ?? "Event", checkoutItems),
+        };
+    }
+
+    public async Task<DataResponse<AttendeeDashboardResponse>> GetAttendeeDashboardAsync(
+        Guid userId
+    )
+    {
+        var orders = await GetMyOrdersAsync(userId);
+        var ownedTicketsResponse = await GetMyOwnedTicketsAsync(userId);
+        var ownedTickets = ownedTicketsResponse.Data ?? [];
+
+        var activeTickets = ownedTickets
+            .Where(ticket =>
+                string.Equals(ticket.Status, "active", StringComparison.OrdinalIgnoreCase)
+            )
+            .ToList();
+
+        var now = DateTime.UtcNow;
+        var upcomingEvents = activeTickets
+            .Where(ticket => ticket.Event is not null && ticket.Event.EndDate >= now)
+            .Select(ticket => ticket.Event!)
+            .GroupBy(ev => ev.Id)
+            .Select(group => group.First())
+            .OrderBy(ev => ev.StartDate)
+            .Take(6)
+            .ToList();
+
+        var recentTickets = ownedTickets
+            .OrderByDescending(ticket => ticket.PurchasedAt)
+            .Take(4)
+            .ToList();
+
+        return new DataResponse<AttendeeDashboardResponse>
+        {
+            IsOk = true,
+            Data = new AttendeeDashboardResponse
+            {
+                Summary = new AttendeeDashboardSummaryResponse
+                {
+                    ActiveTickets = activeTickets.Count,
+                    TotalOrders = orders.Data?.Count ?? 0,
+                    UpcomingEvents = upcomingEvents.Count,
+                },
+                RecentTickets = recentTickets,
+                UpcomingEvents = upcomingEvents,
+            },
         };
     }
 
@@ -350,19 +411,38 @@ public class CheckoutService : ICheckoutService
         return new DataResponse<List<OrderListItemResponse>> { IsOk = true, Data = orders };
     }
 
+    public async Task<DataResponse<OrderListItemResponse>> GetMyOrderByIdAsync(
+        Guid userId,
+        string orderId
+    )
+    {
+        var checkoutId = ParseOrderId(orderId);
+        var checkout = await _checkoutRepository.GetByIdAsync(checkoutId);
+        if (checkout is null || checkout.UserId != userId)
+            throw new NotFoundException("Order not found.");
+
+        var normalizedCheckout = await EnsureExpiredIfNeededAsync(checkout);
+        var ev = await _eventRepository.GetByIdAsync(normalizedCheckout.EventId);
+        var checkoutItems = await _checkoutRepository.GetItemsByCheckoutIdAsync(
+            normalizedCheckout.Id
+        );
+
+        return new DataResponse<OrderListItemResponse>
+        {
+            IsOk = true,
+            Data = MapOrderResponse(normalizedCheckout, userId, ev, checkoutItems),
+        };
+    }
+
     public async Task<DataResponse<List<OwnedTicketResponse>>> GetMyOwnedTicketsAsync(Guid userId)
     {
-        var checkouts = await _checkoutRepository.GetByUserIdAsync(userId);
-        var paidCheckouts = checkouts
-            .Where(checkout => checkout.Status == CheckoutStatusEnum.Paid)
-            .ToList();
-
-        if (paidCheckouts.Count == 0)
+        var persistedTickets = await _ticketRepository.GetByUserIdAsync(userId);
+        if (persistedTickets.Count == 0)
         {
             return new DataResponse<List<OwnedTicketResponse>> { IsOk = true, Data = [] };
         }
 
-        var eventIds = paidCheckouts.Select(checkout => checkout.EventId).Distinct().ToList();
+        var eventIds = persistedTickets.Select(ticket => ticket.EventId).Distinct().ToList();
 
         var eventById = new Dictionary<Guid, EventResponse>();
         foreach (var eventId in eventIds)
@@ -372,49 +452,124 @@ public class CheckoutService : ICheckoutService
                 eventById[eventId] = ev;
         }
 
-        var ticketTypeById = new Dictionary<Guid, TicketTypeResponse>();
+        var ticketTypeIds = persistedTickets
+            .Select(ticket => ticket.TicketTypeId)
+            .Distinct()
+            .ToHashSet();
+        var ticketTypeById = new Dictionary<Guid, TicketTypeResponse>(ticketTypeIds.Count);
         var ticketTypesByEventId = await _ticketTypeRepository.GetByEventIdsAsync(eventIds);
-        foreach (var entry in ticketTypesByEventId)
+        foreach (var ticketTypeList in ticketTypesByEventId.Values)
         {
-            foreach (var ticketType in entry.Value)
-                ticketTypeById[ticketType.Id] = ticketType;
-        }
-
-        var ownedTickets = new List<OwnedTicketResponse>();
-
-        foreach (var checkout in paidCheckouts)
-        {
-            var checkoutItems = await _checkoutRepository.GetItemsByCheckoutIdAsync(checkout.Id);
-            var orderId = $"ord-{checkout.Id:N}";
-            var purchasedAt = checkout.PaidAt ?? checkout.CreatedOn;
-
-            foreach (var item in checkoutItems)
+            foreach (
+                var ticketType in ticketTypeList.Where(ticketType =>
+                    ticketTypeIds.Contains(ticketType.Id)
+                )
+            )
             {
-                var ticketType = ticketTypeById.GetValueOrDefault(item.TicketTypeId);
-                var eventResponse = eventById.GetValueOrDefault(checkout.EventId);
-
-                for (var i = 0; i < item.Quantity; i++)
-                {
-                    var ticketId = $"tkt-{checkout.Id:N}-{item.TicketTypeId:N}-{i + 1}";
-                    ownedTickets.Add(
-                        new OwnedTicketResponse
-                        {
-                            Id = ticketId,
-                            TicketTypeId = item.TicketTypeId.ToString("N"),
-                            TicketType = ticketType,
-                            UserId = userId.ToString("N"),
-                            OrderId = orderId,
-                            Event = eventResponse,
-                            QrCode = $"QR_DATA_{ticketId}",
-                            Status = "active",
-                            PurchasedAt = purchasedAt,
-                        }
-                    );
-                }
+                ticketTypeById[ticketType.Id] = ticketType;
             }
         }
 
+        var now = DateTime.UtcNow;
+        var ownedTickets = new List<OwnedTicketResponse>(persistedTickets.Count);
+
+        foreach (var ticket in persistedTickets)
+        {
+            var eventEndDate = eventById.GetValueOrDefault(ticket.EventId)?.EndDate;
+            var status = ResolveTicketStatus(ticket, now, eventEndDate);
+            if (
+                status == TicketOwnershipStatusEnum.Expired
+                && ticket.Status == TicketOwnershipStatusEnum.Active
+            )
+            {
+                await _ticketRepository.MarkAsExpiredAsync(ticket.Id, now, "system");
+            }
+
+            ownedTickets.Add(
+                new OwnedTicketResponse
+                {
+                    Id = ticket.Id.ToString("N"),
+                    TicketTypeId = ticket.TicketTypeId.ToString("N"),
+                    TicketType = ticketTypeById.GetValueOrDefault(ticket.TicketTypeId),
+                    UserId = ticket.UserId.ToString("N"),
+                    OrderId = $"ord-{ticket.CheckoutId:N}",
+                    Event = eventById.GetValueOrDefault(ticket.EventId),
+                    QrCode = ticket.QrPayload,
+                    Status = status.ToString().ToLowerInvariant(),
+                    PurchasedAt = ticket.PurchasedAt,
+                }
+            );
+        }
+
         return new DataResponse<List<OwnedTicketResponse>> { IsOk = true, Data = ownedTickets };
+    }
+
+    public async Task<DataResponse<List<OwnedTicketResponse>>> GetMyOwnedTicketsByEventAsync(
+        Guid userId,
+        Guid eventId
+    )
+    {
+        var allTickets = await GetMyOwnedTicketsAsync(userId);
+        return new DataResponse<List<OwnedTicketResponse>>
+        {
+            IsOk = true,
+            Data =
+                allTickets
+                    .Data?.Where(ticket => ticket.Event is not null && ticket.Event.Id == eventId)
+                    .ToList()
+                ?? [],
+        };
+    }
+
+    public async Task<BaseResponse> MarkTicketAsUsedAsync(Guid ticketId, Guid organizerId)
+    {
+        var ticket = await _ticketRepository.GetByIdAsync(ticketId);
+        if (ticket is null)
+            throw new NotFoundException("Ticket not found.");
+
+        var ev = await _eventRepository.GetByIdAsync(ticket.EventId);
+        if (ev is null)
+            throw new NotFoundException("Ticket event not found.");
+
+        if (ev.OrganizerId != organizerId)
+            throw new ForbiddenException("You cannot update a ticket for this event.");
+
+        var now = DateTime.UtcNow;
+        var status = ResolveTicketStatus(ticket, now, ev.EndDate);
+
+        if (status == TicketOwnershipStatusEnum.Expired)
+        {
+            if (ticket.Status == TicketOwnershipStatusEnum.Active)
+                await _ticketRepository.MarkAsExpiredAsync(ticket.Id, now, "system");
+
+            throw new ConflictException("Ticket is expired and cannot be used.");
+        }
+
+        if (status == TicketOwnershipStatusEnum.Used)
+        {
+            return new BaseResponse
+            {
+                IsOk = true,
+                Message = "Ticket is already marked as used.",
+                AnyChange = 0,
+            };
+        }
+
+        if (status != TicketOwnershipStatusEnum.Active)
+            throw new ConflictException($"Ticket cannot be used from status '{status}'.");
+
+        var rows = await _ticketRepository.MarkAsUsedAsync(
+            ticket.Id,
+            now,
+            $"organizer:{organizerId:N}"
+        );
+
+        return new BaseResponse
+        {
+            IsOk = true,
+            Message = rows > 0 ? "Ticket marked as used." : "Ticket state did not change.",
+            AnyChange = rows,
+        };
     }
 
     public async Task<string> GetInvoiceUrlAsync(Guid checkoutId, Guid userId)
@@ -471,6 +626,15 @@ public class CheckoutService : ICheckoutService
                     await _checkoutLockService.FinalizeReservationAsync(
                         checkout.Id,
                         checkoutItem.TicketTypeId
+                    );
+
+                var refreshedCheckout = await _checkoutRepository.GetByIdAsync(checkout.Id);
+                var ev = await _eventRepository.GetByIdAsync(checkout.EventId);
+                if (refreshedCheckout is not null)
+                    await SendOrderPaidEmailAsync(
+                        refreshedCheckout,
+                        ev?.Title ?? "Event",
+                        checkoutItems
                     );
             }
 
@@ -587,6 +751,194 @@ public class CheckoutService : ICheckoutService
         };
     }
 
+    private OrderListItemResponse MapOrderResponse(
+        CheckoutSession checkout,
+        Guid userId,
+        EventResponse? ev,
+        IReadOnlyCollection<CheckoutSessionItem> checkoutItems
+    ) =>
+        new()
+        {
+            Id = $"ord-{checkout.Id:N}",
+            CheckoutId = checkout.Id,
+            ExternalId = checkout.InvoiceExternalId,
+            UserId = userId.ToString("N"),
+            Status = checkout.Status.ToString().ToLowerInvariant(),
+            Event = ev,
+            InvoiceUrl = checkout.XenditInvoiceUrl ?? string.Empty,
+            PaymentMethod = checkout.PaymentMethod,
+            TotalQuantity = checkout.Quantity,
+            TotalAmount = checkout.TotalAmount,
+            Currency = checkout.Currency,
+            CreatedAt = checkout.CreatedOn,
+            ExpiresAt = checkout.ExpiresAt,
+            PaidAt = checkout.PaidAt,
+            FailureReason = checkout.FailureReason,
+            Items = checkoutItems
+                .Select(item => new CheckoutItemResponse
+                {
+                    TicketTypeId = item.TicketTypeId,
+                    TicketName = item.TicketName,
+                    Quantity = item.Quantity,
+                    UnitPrice = item.UnitPrice,
+                    LineTotal = item.LineTotal,
+                    Currency = item.Currency,
+                })
+                .ToList(),
+        };
+
+    private static Guid ParseOrderId(string orderId)
+    {
+        if (string.IsNullOrWhiteSpace(orderId))
+            throw new NotFoundException("Order not found.");
+
+        var normalized = orderId.StartsWith("ord-", StringComparison.OrdinalIgnoreCase)
+            ? orderId[4..]
+            : orderId;
+
+        if (!Guid.TryParse(normalized, out var checkoutId))
+            throw new NotFoundException("Order not found.");
+
+        return checkoutId;
+    }
+
+    private async Task SendOrderCreatedEmailAsync(
+        CheckoutSession checkout,
+        string eventTitle,
+        IReadOnlyCollection<CheckoutSessionItem> items
+    )
+    {
+        try
+        {
+            var orderId = $"ord-{checkout.Id:N}";
+            var orderDetailUrl = BuildFrontendUrl($"/dashboard/orders/{orderId}");
+            var lines = string.Join(
+                string.Empty,
+                items.Select(item =>
+                    $"<li>{item.TicketName} x{item.Quantity} - {item.LineTotal:N0} {item.Currency}</li>"
+                )
+            );
+
+            var body = $"""
+                <p>Hi {checkout.UserFullName},</p>
+                <p>Your order for <strong>{eventTitle}</strong> has been created.</p>
+                <p><strong>Order ID:</strong> {orderId}<br/>
+                <strong>Total:</strong> {checkout.TotalAmount:N0} {checkout.Currency}<br/>
+                <strong>Expires At:</strong> {checkout.ExpiresAt:yyyy-MM-dd HH:mm} UTC</p>
+                <p><strong>Items</strong></p>
+                <ul>{lines}</ul>
+                <p>
+                    <a href=\"{checkout.XenditInvoiceUrl}\">Complete Payment</a><br/>
+                    <a href=\"{orderDetailUrl}\">View Order Detail</a>
+                </p>
+                <p>Thanks,<br/>GetTicket</p>
+                """;
+
+            await _emailService.SendAsync(
+                checkout.UserEmail,
+                $"[GetTicket] Order Created - {orderId}",
+                body
+            );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed sending order-created email for checkout {CheckoutId}",
+                checkout.Id
+            );
+        }
+    }
+
+    private async Task SendOrderPaidEmailAsync(
+        CheckoutSession checkout,
+        string eventTitle,
+        IReadOnlyCollection<CheckoutSessionItem> items
+    )
+    {
+        try
+        {
+            var orderId = $"ord-{checkout.Id:N}";
+            var orderDetailUrl = BuildFrontendUrl($"/dashboard/orders/{orderId}");
+            var ticketListUrl = BuildFrontendUrl($"/dashboard/tickets/{checkout.EventId}");
+            var lines = string.Join(
+                string.Empty,
+                items.Select(item =>
+                    $"<li>{item.TicketName} x{item.Quantity} - {item.LineTotal:N0} {item.Currency}</li>"
+                )
+            );
+
+            var attachments = await BuildQrAttachmentsAsync(checkout.Id);
+            var body = $"""
+                <p>Hi {checkout.UserFullName},</p>
+                <p>Your payment for <strong>{eventTitle}</strong> is confirmed.</p>
+                <p><strong>Order ID:</strong> {orderId}<br/>
+                <strong>Total Paid:</strong> {checkout.TotalAmount:N0} {checkout.Currency}<br/>
+                <strong>Paid At:</strong> {checkout.PaidAt:yyyy-MM-dd HH:mm} UTC</p>
+                <p><strong>Items</strong></p>
+                <ul>{lines}</ul>
+                <p>
+                    <a href=\"{ticketListUrl}\">Open Your Ticket List</a><br/>
+                    <a href=\"{orderDetailUrl}\">View Order Detail</a>
+                </p>
+                <p>QR code attachments are included in this email.</p>
+                <p>Thanks,<br/>GetTicket</p>
+                """;
+
+            await _emailService.SendAsync(
+                checkout.UserEmail,
+                $"[GetTicket] Payment Confirmed - {orderId}",
+                body,
+                attachments
+            );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed sending paid-order email for checkout {CheckoutId}",
+                checkout.Id
+            );
+        }
+    }
+
+    private async Task<IReadOnlyCollection<EmailAttachment>> BuildQrAttachmentsAsync(
+        Guid checkoutId
+    )
+    {
+        var tickets = await _ticketRepository.GetByCheckoutIdAsync(checkoutId);
+        if (tickets.Count == 0)
+            return [];
+
+        return tickets
+            .Take(20)
+            .Select(ticket =>
+            {
+                using var qrGenerator = new QRCodeGenerator();
+                using var qrData = qrGenerator.CreateQrCode(
+                    ticket.QrPayload,
+                    QRCodeGenerator.ECCLevel.Q
+                );
+                var qrPng = new PngByteQRCode(qrData);
+                var bytes = qrPng.GetGraphic(10);
+
+                return new EmailAttachment
+                {
+                    FileName = $"ticket-{ticket.Id:N}.png",
+                    ContentType = "image/png",
+                    Content = bytes,
+                };
+            })
+            .ToList();
+    }
+
+    private string BuildFrontendUrl(string path)
+    {
+        var baseUrl = (_frontendOptions.BaseUrl ?? "http://localhost:3000").TrimEnd('/');
+        var normalizedPath = path.StartsWith('/') ? path : $"/{path}";
+        return $"{baseUrl}{normalizedPath}";
+    }
+
     private static void ValidateEventAvailability(string status)
     {
         if (
@@ -596,6 +948,26 @@ public class CheckoutService : ICheckoutService
         {
             throw new ConflictException("This event is not available for checkout.");
         }
+    }
+
+    private static TicketOwnershipStatusEnum ResolveTicketStatus(
+        Ticket ticket,
+        DateTime now,
+        DateTime? eventEndDate
+    )
+    {
+        var isEndedByEventTime = eventEndDate.HasValue && eventEndDate.Value <= now;
+        var isEndedByTicketExpiry = ticket.ExpiresAt.HasValue && ticket.ExpiresAt.Value <= now;
+
+        if (
+            ticket.Status == TicketOwnershipStatusEnum.Active
+            && (isEndedByEventTime || isEndedByTicketExpiry)
+        )
+        {
+            return TicketOwnershipStatusEnum.Expired;
+        }
+
+        return ticket.Status;
     }
 
     private static void ValidateTicketAvailability(TicketTypeResponse ticketType, int quantity)

@@ -180,6 +180,32 @@ public class OwnedTicketResponse
     public DateTime PurchasedAt { get; set; }
 }
 
+/// <summary>Top-level attendee dashboard payload.</summary>
+public class AttendeeDashboardResponse
+{
+    /// <summary>Aggregated dashboard counters for current attendee.</summary>
+    public AttendeeDashboardSummaryResponse Summary { get; set; } = new();
+
+    /// <summary>Most recently purchased tickets.</summary>
+    public List<OwnedTicketResponse> RecentTickets { get; set; } = [];
+
+    /// <summary>Unique upcoming events derived from active tickets.</summary>
+    public List<EventResponse> UpcomingEvents { get; set; } = [];
+}
+
+/// <summary>Attendee dashboard summary metrics.</summary>
+public class AttendeeDashboardSummaryResponse
+{
+    /// <summary>Total active tickets currently owned by attendee.</summary>
+    public int ActiveTickets { get; set; }
+
+    /// <summary>Total orders/checkouts created by attendee.</summary>
+    public int TotalOrders { get; set; }
+
+    /// <summary>Total unique upcoming events from active tickets.</summary>
+    public int UpcomingEvents { get; set; }
+}
+
 /// <summary>Authenticated customer information used during checkout.</summary>
 public class CheckoutUserContext
 {

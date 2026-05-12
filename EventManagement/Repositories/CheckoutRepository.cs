@@ -316,6 +316,71 @@ public class CheckoutRepository : ICheckoutRepository
             return 0;
         }
 
+        const string insertTicketsSql = """
+            WITH checkout_context AS (
+                SELECT cs.id AS checkout_id,
+                       cs.user_id,
+                       cs.event_id,
+                       COALESCE(cs.paid_at, cs.created_on) AS purchased_at,
+                       ev.end_date AS expires_at
+                FROM checkout_sessions AS cs
+                INNER JOIN events AS ev ON ev.id = cs.event_id
+                WHERE cs.id = @Id
+            ),
+            expanded_items AS (
+                SELECT csi.ticket_type_id,
+                       generate_series(1, csi.quantity) AS serial_no
+                FROM checkout_session_items AS csi
+                WHERE csi.checkout_id = @Id
+            )
+            INSERT INTO tickets (
+                id,
+                checkout_id,
+                user_id,
+                event_id,
+                ticket_type_id,
+                serial_no,
+                qr_payload,
+                status,
+                purchased_at,
+                expires_at,
+                created_on,
+                created_by
+            )
+            SELECT uuid_generate_v4(),
+                   ctx.checkout_id,
+                   ctx.user_id,
+                   ctx.event_id,
+                   item.ticket_type_id,
+                   item.serial_no,
+                   CONCAT('tkt:', ctx.checkout_id::text, ':', item.ticket_type_id::text, ':', item.serial_no::text),
+                   @ActiveStatus,
+                   ctx.purchased_at,
+                   ctx.expires_at,
+                   @UpdatedOn,
+                   @UpdatedBy
+            FROM checkout_context AS ctx
+            CROSS JOIN expanded_items AS item
+            """;
+
+        var insertedTicketRows = await Crud.InsertAsync(
+            ctx,
+            insertTicketsSql,
+            new
+            {
+                Id = id,
+                UpdatedOn = updatedOn,
+                UpdatedBy = updatedBy,
+                ActiveStatus = TicketOwnershipStatusEnum.Active,
+            }
+        );
+
+        if (insertedTicketRows <= 0)
+        {
+            await ctx.RollbackAsync();
+            return 0;
+        }
+
         await ctx.CommitAsync();
         return checkoutRows;
     }
@@ -371,5 +436,58 @@ public class CheckoutRepository : ICheckoutRepository
                 Now = now,
             }
         );
+    }
+
+    public async Task<OrganizerSalesTotals> GetOrganizerSalesTotalsAsync(Guid organizerId)
+    {
+        using var ctx = _dbManager.CreateContext();
+        const string sql = """
+            SELECT
+                COALESCE(COUNT(DISTINCT cs.user_id), 0) AS total_attendees,
+                COALESCE(SUM(cs.quantity), 0) AS tickets_sold,
+                COALESCE(SUM(cs.total_amount), 0) AS gross_revenue,
+                COALESCE(MIN(cs.currency), 'IDR') AS currency
+            FROM checkout_sessions AS cs
+            INNER JOIN events AS ev ON ev.id = cs.event_id
+            WHERE ev.organizer_id = @OrganizerId
+              AND ev.is_deleted = FALSE
+              AND cs.status = @PaidStatus
+            """;
+
+        return await Crud.QueryFirstOrDefaultAsync<OrganizerSalesTotals>(
+                ctx,
+                sql,
+                new { OrganizerId = organizerId, PaidStatus = CheckoutStatusEnum.Paid }
+            ) ?? new OrganizerSalesTotals();
+    }
+
+    public async Task<IReadOnlyList<OrganizerSalesByEvent>> GetSalesByEventIdsAsync(
+        IReadOnlyCollection<Guid> eventIds
+    )
+    {
+        if (eventIds.Count == 0)
+            return [];
+
+        using var ctx = _dbManager.CreateContext();
+        const string sql = """
+            SELECT
+                cs.event_id,
+                COALESCE(COUNT(DISTINCT cs.user_id), 0) AS attendee_count,
+                COALESCE(SUM(cs.quantity), 0) AS sold_tickets,
+                COALESCE(SUM(cs.total_amount), 0) AS gross_revenue,
+                COALESCE(MIN(cs.currency), 'IDR') AS currency
+            FROM checkout_sessions AS cs
+            WHERE cs.status = @PaidStatus
+              AND cs.event_id = ANY(@EventIds)
+            GROUP BY cs.event_id
+            """;
+
+        return (
+            await Crud.QueryAsync<OrganizerSalesByEvent>(
+                ctx,
+                sql,
+                new { EventIds = eventIds.ToArray(), PaidStatus = CheckoutStatusEnum.Paid }
+            )
+        ).ToList();
     }
 }

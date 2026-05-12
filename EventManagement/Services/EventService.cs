@@ -11,16 +11,19 @@ public class EventService : IEventService
     private const string PlaceholderPosterImage = "https://placehold.co/600x900?text=Event+Poster";
 
     private readonly IEventRepository _eventRepository;
+    private readonly ICheckoutRepository _checkoutRepository;
     private readonly ITicketTypeRepository _ticketTypeRepository;
     private readonly IUserLookupRepository _userLookup;
 
     public EventService(
         IEventRepository eventRepository,
+        ICheckoutRepository checkoutRepository,
         ITicketTypeRepository ticketTypeRepository,
         IUserLookupRepository userLookup
     )
     {
         _eventRepository = eventRepository;
+        _checkoutRepository = checkoutRepository;
         _ticketTypeRepository = ticketTypeRepository;
         _userLookup = userLookup;
     }
@@ -48,11 +51,19 @@ public class EventService : IEventService
         var myEvents = await _eventRepository.GetByOrganizerIdAsync(organizerId);
         await EnrichEventListAsync(myEvents.List);
 
+        var eventSalesStats = (
+            await _checkoutRepository.GetSalesByEventIdsAsync(
+                myEvents.List.Select(ev => ev.Id).ToArray()
+            )
+        ).ToDictionary(stats => stats.EventId);
+
+        var totals = await _checkoutRepository.GetOrganizerSalesTotalsAsync(organizerId);
+
         var recentEvents = myEvents
             .List.OrderByDescending(x => x.StartDate)
             .Take(3)
             .Select(
-                (ev, index) =>
+                ev =>
                     new OrganizerRecentEventResponse
                     {
                         Id = ev.Id,
@@ -62,8 +73,8 @@ public class EventService : IEventService
                         Location = ev.Location,
                         Status = ev.Status,
                         TotalTickets = ev.TicketTypes.Sum(tt => tt.TotalSeats),
-                        SoldTickets = GetStaticSoldTickets(index),
-                        GrossRevenue = GetStaticGrossRevenue(index),
+                SoldTickets = eventSalesStats.GetValueOrDefault(ev.Id)?.SoldTickets ?? 0,
+                GrossRevenue = eventSalesStats.GetValueOrDefault(ev.Id)?.GrossRevenue ?? 0,
                         PosterImage = ev.PosterImage,
                     }
             )
@@ -77,10 +88,10 @@ public class EventService : IEventService
                 Summary = new OrganizerDashboardSummaryResponse
                 {
                     TotalEvents = myEvents.RecordCount,
-                    TotalAttendees = 1843,
-                    TicketsSold = 3270,
-                    GrossRevenue = 785000000,
-                    Currency = "IDR",
+                    TotalAttendees = totals.TotalAttendees,
+                    TicketsSold = totals.TicketsSold,
+                    GrossRevenue = totals.GrossRevenue,
+                    Currency = totals.Currency,
                 },
                 RecentEvents = recentEvents,
             },
@@ -240,24 +251,6 @@ public class EventService : IEventService
 
     private static string GetPosterOrPlaceholder(string? posterImage) =>
         string.IsNullOrWhiteSpace(posterImage) ? PlaceholderPosterImage : posterImage;
-
-    // Placeholder metrics until attendee/order domain exists.
-    private static int GetStaticSoldTickets(int index) =>
-        index switch
-        {
-            0 => 1346,
-            1 => 1020,
-            _ => 0,
-        };
-
-    // Placeholder metrics until attendee/order domain exists.
-    private static decimal GetStaticGrossRevenue(int index) =>
-        index switch
-        {
-            0 => 412000000,
-            1 => 96500000,
-            _ => 0,
-        };
 
     private async Task<int> CreateTicketTypesAsync(
         Guid eventId,

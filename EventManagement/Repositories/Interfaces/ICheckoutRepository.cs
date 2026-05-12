@@ -31,4 +31,25 @@ public interface ICheckoutRepository
     );
     Task<List<CheckoutSession>> GetExpiredPendingAsync(DateTime now, int batchSize);
     Task<int> GetActiveReservedQuantityAsync(Guid ticketTypeId, DateTime now);
+    Task<OrganizerSalesTotals> GetOrganizerSalesTotalsAsync(Guid organizerId);
+    Task<IReadOnlyList<OrganizerSalesByEvent>> GetSalesByEventIdsAsync(
+        IReadOnlyCollection<Guid> eventIds
+    );
+}
+
+public class OrganizerSalesTotals
+{
+    public int TotalAttendees { get; set; }
+    public int TicketsSold { get; set; }
+    public decimal GrossRevenue { get; set; }
+    public string Currency { get; set; } = "IDR";
+}
+
+public class OrganizerSalesByEvent
+{
+    public Guid EventId { get; set; }
+    public int AttendeeCount { get; set; }
+    public int SoldTickets { get; set; }
+    public decimal GrossRevenue { get; set; }
+    public string Currency { get; set; } = "IDR";
 }

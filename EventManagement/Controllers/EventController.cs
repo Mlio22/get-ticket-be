@@ -48,26 +48,6 @@ public class EventController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>Get dashboard data for the logged-in Event Organizer.</summary>
-    /// <returns>Organizer summary metrics and recent events.</returns>
-    /// <response code="200">Returns dashboard data for organizer.</response>
-    /// <response code="401">Missing or invalid JWT token.</response>
-    /// <response code="403">Authenticated user does not have the EventOrganizer role.</response>
-    [HttpGet("dashboard")]
-    [Authorize(Roles = "EventOrganizer")]
-    [ProducesResponseType(
-        typeof(DataResponse<OrganizerDashboardResponse>),
-        StatusCodes.Status200OK
-    )]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<IActionResult> GetDashboard()
-    {
-        var organizerId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var result = await _eventService.GetOrganizerDashboardAsync(organizerId);
-        return Ok(result);
-    }
-
     /// <summary>Get a single published event by its ID (public).</summary>
     /// <param name="id">The event's unique identifier (GUID).</param>
     /// <returns>The matching event.</returns>

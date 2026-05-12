@@ -95,6 +95,8 @@ builder.Services.AddScoped<ICurrentUser, CurrentUser>();
 
 builder.Services.Configure<CheckoutOptions>(builder.Configuration.GetSection("Checkout"));
 builder.Services.Configure<XenditOptions>(builder.Configuration.GetSection("Xendit"));
+builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection("Email"));
+builder.Services.Configure<FrontendOptions>(builder.Configuration.GetSection("Frontend"));
 
 // CORS
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
@@ -113,11 +115,13 @@ builder.Services.AddCors(options =>
 // App services
 builder.Services.AddScoped<IEventRepository, EventRepository>();
 builder.Services.AddScoped<ITicketTypeRepository, TicketTypeRepository>();
+builder.Services.AddScoped<ITicketRepository, TicketRepository>();
 builder.Services.AddScoped<IUserLookupRepository, UserLookupRepository>();
 builder.Services.AddScoped<ICheckoutRepository, CheckoutRepository>();
 builder.Services.AddScoped<IEventService, EventService>();
 builder.Services.AddScoped<ITicketTypeService, TicketTypeService>();
 builder.Services.AddScoped<ICheckoutService, CheckoutService>();
+builder.Services.AddScoped<IEmailService, SmtpEmailService>();
 builder.Services.AddSingleton<ICheckoutLockService, RedisCheckoutLockService>();
 builder.Services.AddHttpClient<IXenditClient, XenditClient>();
 builder.Services.AddHostedService<CheckoutExpirationBackgroundService>();

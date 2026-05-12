@@ -32,3 +32,6 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "event_management_d
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "event_management_db" \
     -f /eventmanagement-migrations/006_checkout_session_items.sql
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "event_management_db" \
+    -f /eventmanagement-migrations/007_tickets.sql
